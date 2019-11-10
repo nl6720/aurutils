@@ -1,0 +1,148 @@
+#!/bin/bash
+# aur-chroot - build packages with systemd-nspawn
+[[ -v AUR_DEBUG ]] && set -o xtrace
+set -o errexit
+readonly argv0=chroot
+readonly PATH=/bin:/usr/bin
+readonly PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+
+machine=$(uname -m)
+readonly machine
+
+# default arguments (machine-dependent)
+directory=/var/lib/aurbuild/$machine
+makepkg_conf=/usr/share/devtools/makepkg-$machine.conf
+
+# default options
+prepare=1 build=1 create=0 multilib=0
+
+trap_exit() {
+    if [[ ! -v AUR_DEBUG ]]; then
+        rm -rf "$tmp"
+    else
+        printf >&2 'AUR_DEBUG: %s: temporary files at %s\n' "$argv0" "$tmp"
+    fi
+}
+
+usage() {
+    printf >&2 'usage: %s [-d repo] [-CDM path] -- <makechrootpkg args>\n' "$argv0"
+    exit 1
+}
+
+source /usr/share/makepkg/util/parseopts.sh
+
+opt_short='cuTd:C:M:'
+opt_long=('database:' 'directory:' 'pacman-conf:' 'makepkg-conf:' 'no-build'
+          'no-prepare' 'config:' 'create' 'multilib' 'bind:' 'bind-ro:')
+opt_hidden=('dump-options' 'nobuild' 'noprepare')
+
+if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
+    usage
+fi
+set -- "${OPTRET[@]}"
+
+unset argv_repo bindmounts_ro cache_dirs makechrootpkg_args makepkg_conf pacman_conf
+while true; do
+    case "$1" in
+        -d|--database)
+            shift; argv_repo+=("$1") ;;
+        --config)
+            shift; config=$1 ;;
+        --create)
+            create=1 ;;
+        --multilib)
+            multilib=1 ;;
+        --no-build|--nobuild)
+            build=0 ;;
+        --no-prepare|--noprepare)
+            prepare=0 ;;
+        # arch-nspawn options
+        -D|--directory)
+            shift; directory=$1 ;;
+        -C|--pacman-conf)
+            shift; pacman_conf=$1 ;;
+        -M|--makepkg-conf)
+            shift; makepkg_conf=$1 ;;
+        # makechrootpkg options
+        -c|--clean)
+            makechrootpkg_args+=(-c) ;;
+        -u|--update)
+            makechrootpkg_args+=(-u) ;;        
+        -T|--temp)
+            makechrootpkg_args+=(-T) ;;
+        --bind)
+            makechrootpkg_args+=(-d "$1") ;;
+        --bind-ro)
+            makechrootpkg_args+=(-D "$1") ;;
+        --dump-options)
+            printf -- '--%s\n' "${opt_long[@]}" ;
+            printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
+            exit ;;
+        --) shift; break ;;
+    esac
+    shift
+done
+
+tmp=$(mktemp -d --tmpdir "aurutils-$argv0.XXXXXXXX") || exit
+trap 'trap_exit' EXIT
+
+if (( $# )); then
+    makechrootpkg_args=("$@")
+fi
+
+# pacman configuration
+case $multilib in
+    1) base_packages=('multilib-devel')
+       devtools_pacman_conf=/usr/share/devtools/pacman-multilib.conf
+       ;;
+    0) base_packages=('base-devel')
+       devtools_pacman_conf=/usr/share/devtools/pacman-extra.conf
+       ;;
+esac
+pacman_conf=${pacman_conf-$devtools_pacman_conf}
+
+# XXX: add CacheDir to arch-nspawn -c
+{ printf '[%s]\n' options
+  pacconf --config "$config" --verbose CacheDir
+
+  for repo in "${argv_repo[@]}"; do
+      printf '[%s]\n' "$repo"
+      pacconf --config "$config" --repo "$repo"
+  done
+} > "$tmp"/custom.conf
+
+# bind mount all file:// paths to container (#461)
+while read -r key _ value; do
+    case $key=$value in
+        Server=file://*)
+            bindmounts_ro+=("${value#file://}")
+            ;;
+    esac
+done < "$tmp"/custom.conf
+
+if (( create )); then
+    # parent path is not created by mkarchroot (#371)
+    if [[ ! -d $directory ]]; then
+        sudo install -d "$directory" -m 755 -v
+    fi
+
+    sudo mkarchroot -C "$tmp"/pacman.conf -M "$makepkg_conf" \
+         "$directory"/root "${base_packages[@]}"
+    exit 0
+fi
+
+if (( prepare )); then
+    # do not print DBPath (#412)
+    pacconf --config "$pacman_conf" --raw | cat - "$tmp"/custom.conf >"$tmp"/pacman.conf
+
+    # locking is done by systemd-nspawn
+    sudo arch-nspawn -C "$tmp"/pacman.conf -M "$makepkg_conf" "$directory"/root \
+         "${bindmounts_ro[@]/#/--bind-ro=}" pacman -Syu --noconfirm
+fi
+
+if (( build )); then
+    sudo --preserve-env=GNUPGHOME,PKGDEST makechrootpkg -r "$directory" \
+         "${bindmounts_ro[@]/#/-D }" "${makechrootpkg_args[@]}"
+fi
+
+# vim: set et sw=4 sts=4 ft=sh:
