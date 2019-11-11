@@ -16,14 +16,6 @@ makepkg_conf=/usr/share/devtools/makepkg-$machine.conf
 # default options
 prepare=1 build=1 create=0 multilib=0
 
-trap_exit() {
-    if [[ ! -v AUR_DEBUG ]]; then
-        rm -rf "$tmp"
-    else
-        printf >&2 'AUR_DEBUG: %s: temporary files at %s\n' "$argv0" "$tmp"
-    fi
-}
-
 usage() {
     printf >&2 'usage: %s [-d repo] [-CDM path] -- <makechrootpkg args>\n' "$argv0"
     exit 1
@@ -31,9 +23,10 @@ usage() {
 
 source /usr/share/makepkg/util/parseopts.sh
 
-opt_short='cuTd:C:M:'
-opt_long=('database:' 'directory:' 'pacman-conf:' 'makepkg-conf:' 'no-build'
-          'no-prepare' 'config:' 'create' 'multilib' 'bind:' 'bind-ro:')
+opt_short='cuTC:M:'
+opt_long=('directory:' 'pacman-conf:' 'makepkg-conf:' 'no-build'
+          'no-prepare' 'create' 'multilib' 'bind:' 'bind-ro:' 'clean'
+          'update' 'temp')
 opt_hidden=('dump-options' 'nobuild' 'noprepare')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
@@ -41,13 +34,9 @@ if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
 fi
 set -- "${OPTRET[@]}"
 
-unset argv_repo bindmounts_ro cache_dirs makechrootpkg_args makepkg_conf pacman_conf
+unset bindmounts_ro cache_dirs makechrootpkg_args pacman_conf
 while true; do
     case "$1" in
-        -d|--database)
-            shift; argv_repo+=("$1") ;;
-        --config)
-            shift; config=$1 ;;
         --create)
             create=1 ;;
         --multilib)
@@ -67,13 +56,13 @@ while true; do
         -c|--clean)
             makechrootpkg_args+=(-c) ;;
         -u|--update)
-            makechrootpkg_args+=(-u) ;;        
+            makechrootpkg_args+=(-u) ;;
         -T|--temp)
             makechrootpkg_args+=(-T) ;;
         --bind)
-            makechrootpkg_args+=(-d "$1") ;;
+            shift; makechrootpkg_args+=(-d "$1") ;;
         --bind-ro)
-            makechrootpkg_args+=(-D "$1") ;;
+            shift; makechrootpkg_args+=(-D "$1") ;;
         --dump-options)
             printf -- '--%s\n' "${opt_long[@]}" ;
             printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
@@ -82,9 +71,6 @@ while true; do
     esac
     shift
 done
-
-tmp=$(mktemp -d --tmpdir "aurutils-$argv0.XXXXXXXX") || exit
-trap 'trap_exit' EXIT
 
 if (( $# )); then
     makechrootpkg_args=("$@")
@@ -101,24 +87,13 @@ case $multilib in
 esac
 pacman_conf=${pacman_conf-$devtools_pacman_conf}
 
-# XXX: add CacheDir to arch-nspawn -c
-{ printf '[%s]\n' options
-  pacconf --config "$config" --verbose CacheDir
-
-  for repo in "${argv_repo[@]}"; do
-      printf '[%s]\n' "$repo"
-      pacconf --config "$config" --repo "$repo"
-  done
-} > "$tmp"/custom.conf
-
-# bind mount all file:// paths to container (#461)
+# bind mount file:// paths to container (#461)
 while read -r key _ value; do
     case $key=$value in
         Server=file://*)
-            bindmounts_ro+=("${value#file://}")
-            ;;
+            bindmounts_ro+=("${value#file://}") ;;
     esac
-done < "$tmp"/custom.conf
+done < <(pacman-conf --config "$pacman_conf")
 
 if (( create )); then
     # parent path is not created by mkarchroot (#371)
@@ -126,23 +101,20 @@ if (( create )); then
         sudo install -d "$directory" -m 755 -v
     fi
 
-    sudo mkarchroot -C "$tmp"/pacman.conf -M "$makepkg_conf" \
+    sudo mkarchroot -C "$pacman_conf" -M "$makepkg_conf" \
          "$directory"/root "${base_packages[@]}"
     exit 0
 fi
 
 if (( prepare )); then
-    # do not print DBPath (#412)
-    pacconf --config "$pacman_conf" --raw | cat - "$tmp"/custom.conf >"$tmp"/pacman.conf
-
     # locking is done by systemd-nspawn
-    sudo arch-nspawn -C "$tmp"/pacman.conf -M "$makepkg_conf" "$directory"/root \
+    sudo arch-nspawn -C "$pacman_conf" -M "$makepkg_conf" "$directory"/root \
          "${bindmounts_ro[@]/#/--bind-ro=}" pacman -Syu --noconfirm
 fi
 
 if (( build )); then
     sudo --preserve-env=GNUPGHOME,PKGDEST makechrootpkg -r "$directory" \
-         "${bindmounts_ro[@]/#/-D }" "${makechrootpkg_args[@]}"
+         "${bindmounts_ro[@]/#/-D}" "${makechrootpkg_args[@]}"
 fi
 
 # vim: set et sw=4 sts=4 ft=sh:
