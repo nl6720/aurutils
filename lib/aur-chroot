@@ -2,15 +2,13 @@
 # aur-chroot - build packages with systemd-nspawn
 [[ -v AUR_DEBUG ]] && set -o xtrace
 set -o errexit
-readonly argv0=chroot
-readonly PATH=/bin:/usr/bin
-readonly PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
-
+argv0=chroot
+PATH=/bin:/usr/bin
+PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 machine=$(uname -m)
-readonly machine
 
-# default arguments (machine-dependent)
-chroot_prefix=extra
+# default arguments
+prefix=extra
 directory=/var/lib/aurbuild/$machine
 makepkg_conf=/usr/share/devtools/makepkg-$machine.conf
 
@@ -18,16 +16,15 @@ makepkg_conf=/usr/share/devtools/makepkg-$machine.conf
 prepare=1 build=1 create=0 
 
 usage() {
-    printf >&2 'usage: %s [-d repo] [-CDM path] -- <makechrootpkg args>\n' "$argv0"
+    printf >&2 'usage: %s [--create] [-CDM path] -- <makechrootpkg args>\n' "$argv0"
     exit 1
 }
 
 source /usr/share/makepkg/util/parseopts.sh
 
-opt_short='cuTC:M:'
-opt_long=('directory:' 'pacman-conf:' 'makepkg-conf:' 'no-build'
-          'no-prepare' 'create' 'prefix:' 'bind:' 'bind-ro:' 'clean'
-          'update' 'temp')
+opt_short='cuTC:D:M:'
+opt_long=('directory:' 'pacman-conf:' 'makepkg-conf:' 'no-build' 'no-prepare'
+          'create' 'prefix:' 'bind:' 'bind-ro:' 'clean' 'update' 'temp')
 opt_hidden=('dump-options' 'nobuild' 'noprepare')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
@@ -41,32 +38,32 @@ while true; do
         --create)
             create=1 ;;
         --prefix)
-            chroot_prefix=$1 ;;
+            prefix=$1 ;;
         --no-build|--nobuild)
             build=0 ;;
         --no-prepare|--noprepare)
             prepare=0 ;;
         # arch-nspawn options
-        -D|--directory)
-            shift; directory=$1 ;;
         -C|--pacman-conf)
             shift; pacman_conf=$1 ;;
+        -D|--directory)
+            shift; directory=$1 ;;
         -M|--makepkg-conf)
             shift; makepkg_conf=$1 ;;
         # makechrootpkg options
+        --bind)
+            shift; makechrootpkg_args+=(-d "$1") ;;
+        --bind-ro)
+            shift; makechrootpkg_args+=(-D "$1") ;;
         -c|--clean)
             makechrootpkg_args+=(-c) ;;
         -u|--update)
             makechrootpkg_args+=(-u) ;;
         -T|--temp)
             makechrootpkg_args+=(-T) ;;
-        --bind)
-            shift; makechrootpkg_args+=(-d "$1") ;;
-        --bind-ro)
-            shift; makechrootpkg_args+=(-D "$1") ;;
         --dump-options)
-            printf -- '--%s\n' "${opt_long[@]}" ;
-            printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g' ;
+            printf -- '--%s\n' "${opt_long[@]}"
+            printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g'
             exit ;;
         --) shift; break ;;
     esac
@@ -78,13 +75,13 @@ if (( $# )); then
 fi
 
 # pacman configuration
-case $chroot_prefix in
+case $prefix in
     multilib*)
         base_packages=('multilib-devel') ;;
     *)
         base_packages=('base-devel') ;;
 esac
-pacman_conf=${pacman_conf:-/usr/share/devtools/pacman-$chroot_prefix.conf}
+pacman_conf=${pacman_conf:-/usr/share/devtools/pacman-$prefix.conf}
 
 # bind mount file:// paths to container (#461)
 while read -r key _ value; do
