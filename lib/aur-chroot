@@ -10,11 +10,12 @@ machine=$(uname -m)
 readonly machine
 
 # default arguments (machine-dependent)
+chroot_prefix=extra
 directory=/var/lib/aurbuild/$machine
 makepkg_conf=/usr/share/devtools/makepkg-$machine.conf
 
 # default options
-prepare=1 build=1 create=0 multilib=0
+prepare=1 build=1 create=0 
 
 usage() {
     printf >&2 'usage: %s [-d repo] [-CDM path] -- <makechrootpkg args>\n' "$argv0"
@@ -25,7 +26,7 @@ source /usr/share/makepkg/util/parseopts.sh
 
 opt_short='cuTC:M:'
 opt_long=('directory:' 'pacman-conf:' 'makepkg-conf:' 'no-build'
-          'no-prepare' 'create' 'multilib' 'bind:' 'bind-ro:' 'clean'
+          'no-prepare' 'create' 'prefix:' 'bind:' 'bind-ro:' 'clean'
           'update' 'temp')
 opt_hidden=('dump-options' 'nobuild' 'noprepare')
 
@@ -39,8 +40,8 @@ while true; do
     case "$1" in
         --create)
             create=1 ;;
-        --multilib)
-            multilib=1 ;;
+        --prefix)
+            chroot_prefix=$1 ;;
         --no-build|--nobuild)
             build=0 ;;
         --no-prepare|--noprepare)
@@ -77,15 +78,13 @@ if (( $# )); then
 fi
 
 # pacman configuration
-case $multilib in
-    1) base_packages=('multilib-devel')
-       devtools_pacman_conf=/usr/share/devtools/pacman-multilib.conf
-       ;;
-    0) base_packages=('base-devel')
-       devtools_pacman_conf=/usr/share/devtools/pacman-extra.conf
-       ;;
+case $chroot_prefix in
+    multilib*)
+        base_packages=('multilib-devel') ;;
+    *)
+        base_packages=('base-devel') ;;
 esac
-pacman_conf=${pacman_conf-$devtools_pacman_conf}
+pacman_conf=${pacman_conf:-/usr/share/devtools/pacman-$chroot_prefix.conf}
 
 # bind mount file:// paths to container (#461)
 while read -r key _ value; do
