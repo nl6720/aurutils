@@ -9,12 +9,14 @@ XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 # default options
-chroot=0 no_sync=0 overwrite=0 sign_pkg=0 run_pkgver=0 results=0
+chroot=0 no_sync=0 overwrite=0 sign_pkg=0 run_pkgver=0 results=0 prefix=aur
 
 # default arguments
-prefix=aur
+chroot_args=()
 gpg_args=(--detach-sign --no-armor --batch)
-pacman_conf=/etc/pacman.conf
+makepkg_args=()
+makechrootpkg_args=(-cu)
+repo_add_args=()
 
 db_replaces() {
     bsdcat "$1" | awk '
@@ -68,9 +70,7 @@ if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
 fi
 set -- "${OPTRET[@]}"
 
-# Do not hardcode arguments to build commands (#635)
-unset build_cmd db_name db_path db_root makepkg_conf results_file queue \
-      chroot_args makechrootpkg_args makepkg_args repo_add_args
+unset build_cmd db_name db_path db_root pacman_conf makepkg_conf results_file queue
 while true; do
     case "$1" in
         # build options
@@ -102,20 +102,19 @@ while true; do
             repo_add_args+=(-s) ;;
         # chroot options
         -D|--directory)
-            shift; chroot_args+=(-D "$1") ;;
+            shift; makechrootpkg_args+=(-r "$1") ;;
         --bind)
-            shift; chroot_args+=(--bind-ro "$1") ;;
+            shift; makechrootpkg_args+=(-D "$1") ;;
         --bind-rw)
-            shift; chroot_args+=(--bind "$1") ;;
+            shift; makechrootpkg_args+=(-d"$1") ;;
         --prefix)
             shift; prefix=$1 ;;
         -T|--temp)
-            chroot_args+=(--temp) ;;
+            makechrootpkg_args+=(-T) ;;
         # makepkg options
         -A|--ignorearch|--ignore-arch)
             makepkg_args+=(--ignorearch) ;;
         -C|--clean)
-            # XXX similar makechrootpkg option (-C short option?)
             makepkg_args+=(--clean) ;;
         -L|--log)
             makepkg_args+=(--log) ;;
@@ -150,7 +149,7 @@ var_tmp=$(mktemp -d --tmpdir="${TMPDIR:-/var/tmp/}" "aurutils-$argv0.XXXXXXXX") 
 trap 'trap_exit' EXIT
 trap 'exit' INT
 
-# Pass all arguments after -- to makepkg
+# Append remaining options to the makechrootpkg command-line
 if (( $# )); then
     if (( chroot )); then
         makechrootpkg_args+=("$@")
@@ -198,7 +197,7 @@ fi
 # Write successfully built packages to file (#437)
 if [[ -v results_file ]] && ! [[ -w $results_file ]]; then
     : >"$results_file" # truncate file
-    results =1
+    results=1
 elif [[ -v results_file ]]; then
     error '%s: %s: permission denied' "$argv0" "$results_file"
     exit 13
@@ -210,15 +209,15 @@ if (( chroot )); then
     chroot_args+=(--prefix "$prefix")
 
     if [[ -v pacman_conf ]];then
-        chroot_args+=(--pacman_conf "$pacman_conf")
+        chroot_args+=(--pacman-conf "$pacman_conf")
     fi
     if [[ -v makepkg_conf ]]; then
-        chroot_args+=(--makepkg_conf "$makepkg_conf")
+        chroot_args+=(--makepkg-conf "$makepkg_conf")
     fi
 
     # Update pacman and makepkg configuration for the chroot build
     # queue. A full system upgrade is run on the /root container to
-    # avoid lenghty upgrades for makechrootpkg -u.
+    # avoid lenghty upgrades for makechrootpkg -cu.
     aur chroot --no-build "${chroot_args[@]}"
 else
     pacman_conf=${pacman_conf:-/etc/pacman.conf}
@@ -308,7 +307,7 @@ while IFS= read -ru "$fd" path; do
         env PKGDEST="$var_tmp" AUR_REPO="$db_name" AUR_DBROOT="$db_root" "${build_cmd[@]}"
     elif (( chroot )); then
         env PKGDEST="$var_tmp" aur chroot --no-prepare "${chroot_args[@]}" \
-            --update -- "${makechrootpkg_args[@]}"
+            -- "${makechrootpkg_args[@]}"
     else
         printf '%s\n' >&2 "Running makepkg ${makepkg_args[*]}"
         makepkg --config "$tmp"/makepkg.conf "${makepkg_args[@]}"

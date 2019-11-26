@@ -8,9 +8,10 @@ PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 machine=$(uname -m)
 
 # default arguments
-prefix=extra
 directory=/var/lib/aurbuild/$machine
+makechrootpkg_args=(-c) # sync /root container to /$USER copy
 makepkg_conf=/usr/share/devtools/makepkg-$machine.conf
+prefix=extra
 
 # default options
 prepare=1 build=1 create=0 
@@ -22,9 +23,9 @@ usage() {
 
 source /usr/share/makepkg/util/parseopts.sh
 
-opt_short='cuTC:D:M:'
+opt_short='C:D:M:'
 opt_long=('directory:' 'pacman-conf:' 'makepkg-conf:' 'no-build' 'no-prepare'
-          'create' 'prefix:' 'bind:' 'bind-ro:' 'clean' 'update' 'temp')
+          'create' 'prefix:' 'bind:' 'bind-ro:' 'temp')
 opt_hidden=('dump-options' 'nobuild' 'noprepare')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
@@ -32,17 +33,17 @@ if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
 fi
 set -- "${OPTRET[@]}"
 
-unset bindmounts_ro cache_dirs makechrootpkg_args pacman_conf
+unset bindmounts_ro bindmounts_rw pacman_conf
 while true; do
     case "$1" in
         --create)
             create=1 ;;
-        --prefix)
-            prefix=$1 ;;
         --no-build|--nobuild)
             build=0 ;;
         --no-prepare|--noprepare)
             prepare=0 ;;
+        --prefix)
+            shift; prefix=$1 ;;
         # arch-nspawn options
         -C|--pacman-conf)
             shift; pacman_conf=$1 ;;
@@ -52,15 +53,10 @@ while true; do
             shift; makepkg_conf=$1 ;;
         # makechrootpkg options
         --bind)
-            shift; makechrootpkg_args+=(-d "$1") ;;
-        --bind-ro)
-            shift; makechrootpkg_args+=(-D "$1") ;;
-        -c|--clean)
-            makechrootpkg_args+=(-c) ;;
-        -u|--update)
-            makechrootpkg_args+=(-u) ;;
-        -T|--temp)
-            makechrootpkg_args+=(-T) ;;
+            shift; bindmounts_ro+=("$1") ;;
+        --bind-rw)
+            shift; bindmounts_rw+=(-d "$1") ;;
+        # other options
         --dump-options)
             printf -- '--%s\n' "${opt_long[@]}"
             printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g'
@@ -70,6 +66,7 @@ while true; do
     shift
 done
 
+# Use remaining options for the makechrootpkg command-line
 if (( $# )); then
     makechrootpkg_args=("$@")
 fi
@@ -105,12 +102,14 @@ fi
 if (( prepare )); then
     # locking is done by systemd-nspawn
     sudo arch-nspawn -C "$pacman_conf" -M "$makepkg_conf" "$directory"/root \
-         "${bindmounts_ro[@]/#/--bind-ro=}" pacman -Syu --noconfirm
+         "${bindmounts_ro[@]/#/--bind-ro=}" \
+         "${bindmounts_rw[@]/#/--bind=}" pacman -Syu --noconfirm
 fi
 
 if (( build )); then
     sudo --preserve-env=GNUPGHOME,PKGDEST makechrootpkg -r "$directory" \
-         "${bindmounts_ro[@]/#/-D}" "${makechrootpkg_args[@]}"
+         "${bindmounts_ro[@]/#/-D}" \
+         "${bindmounts_rw[@]/#/-d}" "${makechrootpkg_args[@]}"
 fi
 
 # vim: set et sw=4 sts=4 ft=sh:
