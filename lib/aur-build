@@ -149,61 +149,6 @@ var_tmp=$(mktemp -d --tmpdir="${TMPDIR:-/var/tmp/}" "aurutils-$argv0.XXXXXXXX") 
 trap 'trap_exit' EXIT
 trap 'exit' INT
 
-# Append remaining options to the makechrootpkg command-line
-if (( $# )); then
-    if (( chroot )); then
-        makechrootpkg_args+=("$@")
-    else
-        makepkg_args+=("$@")
-    fi
-fi
-
-# Assign environment variables (#443)
-: "${db_name=$AUR_REPO}"
-: "${db_root=$AUR_DBROOT}"
-
-# Automatically choose repository root and name based on pacman
-# configuration and user environment.
-case $db_name in
-    "")
-        case $db_root in
-            "") db_path=$(aur repo)
-                db_name=$(basename "$db_path" .db)
-                db_root=$(dirname "$db_path")
-                ;;
-             *) error '%s: root specified without database name' "$argv0"
-                exit 1 ;;
-        esac ;;
-    *)
-        case $db_root in
-            "") db_path=$(aur repo -d "$db_name")
-                db_name=$(basename "$db_path" .db)
-                db_root=$(dirname "$db_path")
-                ;;
-             *) db_path=$db_root/$db_name.db
-                ;;
-        esac ;;
-esac
-
-# Resolve symbolic link to database.
-if ! db_path=$(readlink -e -- "$db_path"); then
-    error '%s: %s: no such file or directory' "$argv0" "$db_path"
-    exit 2
-elif ! [[ -w $db_path ]]; then
-    error '%s: %s: permission denied' "$argv0" "$db_path"
-    exit 13
-fi
-
-# Write successfully built packages to file (#437)
-if [[ -v results_file ]] && ! [[ -w $results_file ]]; then
-    : >"$results_file" # truncate file
-    results=1
-elif [[ -v results_file ]]; then
-    error '%s: %s: permission denied' "$argv0" "$results_file"
-    exit 13
-fi
-
-# XXX verify permissions on pacman.conf
 if (( chroot )); then
     # Default to /usr/share/devtools/pacman-<prefix>.conf
     chroot_args+=(--prefix "$prefix")
@@ -214,14 +159,59 @@ if (( chroot )); then
     if [[ -v makepkg_conf ]]; then
         chroot_args+=(--makepkg-conf "$makepkg_conf")
     fi
+fi
 
+# Append remaining options to make{,chroot}pkg command-line
+makepkg_args+=("$@")
+makechrootpkg_args+=("$@")
+
+# Assign environment variables (#443)
+: "${db_name=$AUR_REPO}"
+: "${db_root=$AUR_DBROOT}"
+: "${pacman_conf=/etc/pacman.conf}"
+
+# Automatically choose repository root and name based on pacman
+# configuration and user environment.
+if [[ -z $db_name ]] && [[ -z $db_root ]]; then
+    db_path=$(aur repo --pacman-conf "$pacman_conf")
+    db_root=$(dirname "$db_path")
+    db_name=$(basename "$db_path" .db)
+
+elif [[ -z $db_name ]] && [[ -n $db_root ]]; then
+    error '%s: root specified without database name' "$argv0"
+    exit 1
+
+elif [[ -n $db_name ]] && [[ -z $db_root ]]; then
+    db_path=$(aur repo --pacman-conf "$pacman_conf" -d "$db_name")
+    db_root=$(dirname "$db_path")
+
+elif [[ -n $db_name ]] && [[ -n $db_root ]]; then
+    db_path=$db_root/$db_name.db
+fi
+
+# Resolve symbolic link to database.
+if ! db_path=$(readlink -e -- "$db_path"); then
+    error '%s: %s: No such file or directory' "$argv0" "$db_path"
+    exit 2
+fi
+
+if ! [[ -w $db_path ]]; then
+    error '%s: %s: Permission denied' "$argv0" "$db_path"
+    exit 13
+fi
+
+# Write successfully built packages to file (#437)
+if [[ -v results_file ]]; then
+    : >"$results_file" # truncate file
+    results=1
+fi
+
+if (( chroot )); then
     # Update pacman and makepkg configuration for the chroot build
     # queue. A full system upgrade is run on the /root container to
     # avoid lenghty upgrades for makechrootpkg -cu.
     aur chroot --no-build "${chroot_args[@]}"
 else
-    pacman_conf=${pacman_conf:-/etc/pacman.conf}
-
     # Configuration for host builds.
     { printf '[options]\n'
       pacconf --raw --options --config "$pacman_conf"
