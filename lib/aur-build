@@ -58,7 +58,7 @@ fi
 
 ## option parsing
 opt_short='a:B:d:D:AcCfnrsvLNRST'
-opt_long=('arg-file:' 'chroot' 'database:' 'force' 'root:' 'sign'
+opt_long=('arg-file:' 'chroot' 'database:' 'repo:' 'force' 'root:' 'sign'
           'verify' 'directory:' 'no-sync' 'pacman-conf:' 'results:'
           'makepkg-conf:' 'remove' 'build-command:' 'pkgver' 'rmdeps'
           'noconfirm' 'ignorearch' 'log' 'new' 'bind:' 'bind-rw:'
@@ -82,7 +82,7 @@ while true; do
             overwrite=1 ;;
         -c|--chroot)
             chroot=1 ;;
-        -d|--database)
+        -d|--database|--repo)
             shift; db_name=$1 ;;
         --makepkg-conf)
             shift; makepkg_conf=$1 ;;
