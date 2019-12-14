@@ -109,7 +109,7 @@ fi | while read -r pkg; do
     export GIT_DIR=$pkg/.git GIT_WORK_TREE=$pkg
 
     # Reset/rebase if we're on valid repo
-    if git rev-parse --git-dir 2>/dev/null; then
+    if git rev-parse --git-dir >/dev/null; then
         if (( confirm_seen )); then
             git update-ref AUR_SEEN HEAD
 
