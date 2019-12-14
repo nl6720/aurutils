@@ -32,8 +32,8 @@ if [[ ! -v NO_COLOR ]] && [[ ! -v AUR_DEBUG ]]; then
     [[ -t 2 ]] && colorize
 fi
 
-opt_short='rvL:S:'
-opt_long=('recurse' 'verbose' 'write-log:' 'confirm-seen' 'sync' 'results:')
+opt_short='rvL:S'
+opt_long=('recurse' 'verbose' 'write-log:' 'confirm-seen' 'sync:' 'results:')
 opt_hidden=('dump-options')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
