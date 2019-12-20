@@ -13,9 +13,6 @@ diff_args=('--patch' '--stat')
 # default options
 verbose=0 recurse=0 confirm_seen=0 results=0 sync=no
 
-# empty tree object
-git_empty_tree=$(git hash-object -t tree /dev/null)
-
 usage() {
     cat <<! | base64 -d
 ICAgICAgICAgICAgIC4tLX5+LF9fCjotLi4uLiwtLS0tLS0tYH5+Jy5fLicKIGAtLCwsICAs
@@ -137,9 +134,13 @@ fi | while read -r pkg; do
             exit 1
         }
 
+        if (( results )); then
+            printf 'fetch:file://%s\n' "$PWD/$pkg" | tee -a "$results_file"
+        fi
+
         if ! seen=$(git rev-parse --quiet --verify AUR_SEEN); then
-            warning '%s: AUR_SEEN object not found, assuming empty tree' "$argv0"
-            seen=$git_empty_tree
+            warning '%s: AUR_SEEN object not found, ignoring %s for diff' "$argv0" "$pkg"
+            continue
         fi
 
         if [[ $seen != "$(git rev-parse HEAD)" ]]; then
@@ -155,14 +156,14 @@ fi | while read -r pkg; do
             fi
         fi
 
-        if (( results )); then
-            printf 'fetch:file://%s\n' "$PWD/$pkg" | tee -a "$results_file"
-        fi
-
     # Otherwise, try to clone anew
     elif git clone "$AUR_LOCATION/$pkg"; then
         # Avoid issues with filesystem boundaries. (#274)
         export GIT_DIR=$pkg/.git GIT_WORK_TREE=$pkg
+
+        if (( results )); then
+            printf 'clone:file://%s\n' "$PWD/$pkg" | tee -a "$results_file"
+        fi
 
         if (( confirm_seen )); then
             git update-ref AUR_SEEN HEAD
@@ -172,9 +173,6 @@ fi | while read -r pkg; do
         # Show PKGBUILDs first. (#399)
         git config diff.orderFile "$orderfile"
 
-        if (( results )); then
-            printf 'clone:file://%s\n' "$PWD/$pkg" | tee -a "$results_file"
-        fi
     else
         error '%s: %s: Failed to clone repository' "$argv0" "$pkg"
         exit 1
